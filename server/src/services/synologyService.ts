@@ -270,19 +270,6 @@ function normalizeSynologyPhotoInfo(item: SynologyPhotoItem): SynologyPhotoInfo 
     };
 }
 
-export function synologyAuthFromQuery(req: Request, res: ExpressResponse, next: NextFunction) {
-    const queryToken = req.query.token as string | undefined;
-    if (queryToken) {
-        const userId = consumeEphemeralToken(queryToken, SYNOLOGY_PROVIDER);
-        if (!userId) return res.status(401).send('Invalid or expired token');
-        const user = db.prepare('SELECT id, username, email, role, mfa_enabled FROM users WHERE id = ?').get(userId) as any;
-        if (!user) return res.status(401).send('User not found');
-        (req as AuthRequest).user = user;
-        return next();
-    }
-    return (authenticate as any)(req, res, next);
-}
-
 export function getSynologyTargetUserId(req: Request): number {
     const { userId } = req.query;
     return Number(userId);

@@ -12,7 +12,6 @@ import {
     searchSynologyPhotos,
     getSynologyAssetInfo,
     pipeSynologyProxy,
-    synologyAuthFromQuery,
     getSynologyTargetUserId,
     streamSynologyAsset,
     handleSynologyError,
@@ -133,7 +132,7 @@ router.get('/assets/:photoId/info', authenticate, async (req: Request, res: Resp
     }
 });
 
-router.get('/assets/:photoId/thumbnail', synologyAuthFromQuery, async (req: Request, res: Response) => {
+router.get('/assets/:photoId/thumbnail', authenticate, async (req: Request, res: Response) => {
     const authReq = req as AuthRequest;
     const { photoId } = req.params;
     const { size = 'sm' } = req.query;
@@ -149,7 +148,7 @@ router.get('/assets/:photoId/thumbnail', synologyAuthFromQuery, async (req: Requ
     }
 });
 
-router.get('/assets/:photoId/original', synologyAuthFromQuery, async (req: Request, res: Response) => {
+router.get('/assets/:photoId/original', authenticate, async (req: Request, res: Response) => {
     const authReq = req as AuthRequest;
     const { photoId } = req.params;
 
