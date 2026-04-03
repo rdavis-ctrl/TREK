@@ -1,22 +1,33 @@
 // Trip PDF via browser print window
 import { createElement } from 'react'
 import { getCategoryIcon } from '../shared/categoryIcons'
-import { FileText, Info, Clock, MapPin, Navigation, Train, Plane, Bus, Car, Ship, Coffee, Ticket, Star, Heart, Camera, Flag, Lightbulb, AlertTriangle, ShoppingBag, Bookmark } from 'lucide-react'
+import { FileText, Info, Clock, MapPin, Navigation, Train, Plane, Bus, Car, Ship, Coffee, Ticket, Star, Heart, Camera, Flag, Lightbulb, AlertTriangle, ShoppingBag, Bookmark, Hotel, LogIn, LogOut, KeyRound, BedDouble, LucideIcon } from 'lucide-react'
 import { accommodationsApi, mapsApi } from '../../api/client'
 import type { Trip, Day, Place, Category, AssignmentsMap, DayNotesMap } from '../../types'
 
+function renderLucideIcon(icon:LucideIcon, props = {}) {
+  if (!_renderToStaticMarkup) return ''
+  return _renderToStaticMarkup(
+    createElement(icon, props)
+  );
+}
+
 const NOTE_ICON_MAP = { FileText, Info, Clock, MapPin, Navigation, Train, Plane, Bus, Car, Ship, Coffee, Ticket, Star, Heart, Camera, Flag, Lightbulb, AlertTriangle, ShoppingBag, Bookmark }
 function noteIconSvg(iconId) {
-  if (!_renderToStaticMarkup) return ''
   const Icon = NOTE_ICON_MAP[iconId] || FileText
-  return _renderToStaticMarkup(createElement(Icon, { size: 14, strokeWidth: 1.8, color: '#94a3b8' }))
+  return renderLucideIcon(Icon, { size: 14, strokeWidth: 1.8, color: '#94a3b8' })
 }
 
 const TRANSPORT_ICON_MAP = { flight: Plane, train: Train, bus: Bus, car: Car, cruise: Ship }
 function transportIconSvg(type) {
-  if (!_renderToStaticMarkup) return ''
   const Icon = TRANSPORT_ICON_MAP[type] || Ticket
-  return _renderToStaticMarkup(createElement(Icon, { size: 14, strokeWidth: 1.8, color: '#3b82f6' }))
+  return renderLucideIcon(Icon, { size: 14, strokeWidth: 1.8, color: '#3b82f6' })
+}
+
+const ACCOMMODATION_ICON_MAP = { accommodation: Hotel, checkin: LogIn, checkout: LogOut, location: MapPin, note: FileText, confirmation: KeyRound }
+function accommodationIconSvg(type) {
+  const Icon = ACCOMMODATION_ICON_MAP[type] || BedDouble
+  return renderLucideIcon(Icon, { size: 14, strokeWidth: 1.8, color: '#03398f', className: 'accommodation-icon' })
 }
 
 // ── SVG inline icons (for chips) ─────────────────────────────────────────────
@@ -231,17 +242,25 @@ export async function downloadTripPDF({ trip, days, places, assignments, categor
       days.some(d => d.id >= a.start_day_id && d.id <= a.end_day_id && d.id === day?.id)
     ).sort((a, b) => a.start_day_id - b.start_day_id);
 
-    const accomodationDetails = accomodationsForDay.map(item => {
+    //Const icons for accomodation actions and details
+    const ICON_ACC_CHECKIN = accommodationIconSvg('checkin');
+    const ICON_ACC_CHECKOUT = accommodationIconSvg('checkout');
+    const ICON_ACC_LOCATION = accommodationIconSvg('location');
+    const ICON_ACC_NOTE = accommodationIconSvg('note');
+    const ICON_ACC_CONFIRMATION = accommodationIconSvg('confirmation');
+    const ICON_ACC_ACCOMMODATION = accommodationIconSvg('accommodation');
 
+    const accomodationDetails = accomodationsForDay.map(item => { 
+      
       const isCheckIn = day.id === item.start_day_id;
       const isCheckOut = day.id === item.end_day_id;
-      const accomoAction = isCheckIn ? '🛎️ '+tr('reservations.meta.checkIn') 
-        : isCheckOut ? '🧳 '+tr('reservations.meta.checkOut') 
-          :  '🏨 '+tr('reservations.meta.linkAccommodation') 
+      const accomoAction = isCheckIn ? tr('reservations.meta.checkIn') 
+        : isCheckOut ? tr('reservations.meta.checkOut') 
+          :  tr('reservations.meta.linkAccommodation') 
 
-      const accomoEmoji = isCheckIn ? '🛎️'
-        : isCheckOut ? '🧳'
-          : ''
+      const accomoEmoji = isCheckIn ? ICON_ACC_CHECKIN
+        : isCheckOut ? ICON_ACC_CHECKOUT
+          : ICON_ACC_ACCOMMODATION
 
       const accomoTime = isCheckIn ? item.check_in || 'N/A'
         : isCheckOut ? item.check_out || 'N/A'
@@ -249,13 +268,13 @@ export async function downloadTripPDF({ trip, days, places, assignments, categor
 
       return `
       <div class="day-accomodation">
-        <div class="day-accomodation-action">${escHtml(accomoAction)}</div>
-        ${accomoTime ? `<div class="action">${accomoEmoji} <b>${accomoTime}</b></div>` : ''}
+        <div class="day-accomodation-title accomodation-center-icon" >${accomoEmoji} ${escHtml(accomoAction)}</div>
+        ${accomoTime ? `<div class="accomodation-center-icon">${accomoEmoji} <b>${accomoTime}</b></div>` : ''}
 
-        <div class="name">🏨 ${escHtml(item.place_name)}</div>
-        ${item.place_address ? `<div class="accomodation-location">📌 ${escHtml(item.place_address)}</div>` : ''}  
-        ${item.notes ? `<div class="accomodation-note">📝 ${escHtml(item.notes)}</div>` : ''}
-    ${isCheckIn && item.confirmation ? `<div class="accomodation-booking-code">🔑 ${escHtml(item.confirmation)}</div>` : ''}
+        <div class="accomodation-center-icon">${ICON_ACC_ACCOMMODATION} ${escHtml(item.place_name)}</div>
+        ${item.place_address ? `<div class="accomodation-center-icon">${ICON_ACC_LOCATION} ${escHtml(item.place_address)}</div>` : ''}  
+        ${item.notes ? `<div class="accomodation-center-icon">${ICON_ACC_NOTE} ${escHtml(item.notes)}</div>` : ''}
+    ${isCheckIn && item.confirmation ? `<div class="accomodation-center-icon">${ICON_ACC_CONFIRMATION} ${escHtml(item.confirmation)}</div>` : ''}
       </div>
       `
     }).join('');
@@ -373,12 +392,23 @@ export async function downloadTripPDF({ trip, days, places, assignments, categor
     flex-direction: column;
   }
 
-  .day-accomodation-action {
+  .day-accomodation-title {
     font-size: 18px;
     font-weight: 600;
     text-align: center;
     margin-bottom: 4px;
+    align-self: center;
   }
+
+  .accomodation-center-icon {
+    display: flex;
+    align-items: center;
+  }
+
+  .accommodation-icon {
+    margin-right: 4px;
+  }
+  
 
   /* ── Place card ────────────────────────────────── */
   .place-card {
