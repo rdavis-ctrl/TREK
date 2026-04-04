@@ -1,9 +1,11 @@
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { Request, Response as ExpressResponse } from 'express';
+import { Response as ExpressResponse } from 'express';
 import { db } from '../db/database';
 import { decrypt_api_key, maybe_encrypt_api_key } from './apiKeyCrypto';
 import { checkSsrf } from '../utils/ssrfGuard';
+import { addTripPhotos, getAlbumIdFromLink, Selection, updateSyncTimeForAlbumLink } from './memoriesService';
+import { error } from 'node:console';
 
 const SYNOLOGY_API_TIMEOUT_MS = 30000;
 const SYNOLOGY_PROVIDER = 'synologyphotos';
@@ -401,10 +403,8 @@ export async function listSynologyAlbums(userId: number): Promise<{ albums: Arra
 
 
 export async function syncSynologyAlbumLink(userId: number, tripId: string, linkId: string): Promise<{ added: number; total: number }> {
-    const link = db.prepare(`SELECT * FROM trip_album_links WHERE id = ? AND trip_id = ? AND user_id = ? AND provider = ?`)
-        .get(linkId, tripId, userId, SYNOLOGY_PROVIDER) as { album_id?: string | number } | undefined;
-
-    if (!link) {
+    const albumId = getAlbumIdFromLink(tripId, linkId, userId);
+    if (!albumId) {
         throw new SynologyServiceError(404, 'Album link not found');
     }
 
@@ -417,7 +417,7 @@ export async function syncSynologyAlbumLink(userId: number, tripId: string, link
             api: 'SYNO.Foto.Browse.Item',
             method: 'list',
             version: 1,
-            album_id: Number(link.album_id),
+            album_id: Number(albumId),
             offset,
             limit: pageSize,
             additional: ['thumbnail'],
@@ -433,22 +433,17 @@ export async function syncSynologyAlbumLink(userId: number, tripId: string, link
         offset += pageSize;
     }
 
-    const insert = db.prepare(
-        "INSERT OR IGNORE INTO trip_photos (trip_id, user_id, asset_id, provider, shared) VALUES (?, ?, ?, 'synologyphotos', 1)"
-    );
+    const selection: Selection = {
+        provider: SYNOLOGY_PROVIDER,
+        asset_ids: allItems.map(item => String(item.additional?.thumbnail?.cache_key || '')).filter(id => id),
+    };
 
-    let added = 0;
-    for (const item of allItems) {
-        const transformed = normalizeSynologyPhotoInfo(item);
-        const assetId = String(transformed?.id || '').trim();
-        if (!assetId) continue;
-        const result = insert.run(tripId, userId, assetId);
-        if (result.changes > 0) added++;
-    }
+    const addResult = addTripPhotos(tripId, userId, true, [selection]);
+    if ('error' in addResult) throw new SynologyServiceError(addResult.status, addResult.error);
 
-    db.prepare('UPDATE trip_album_links SET last_synced_at = CURRENT_TIMESTAMP WHERE id = ?').run(linkId);
+    updateSyncTimeForAlbumLink(linkId);
 
-    return { added, total: allItems.length };
+    return { added: addResult.added, total: allItems.length };
 }
 
 export async function searchSynologyPhotos(userId: number, from?: string, to?: string, offset = 0, limit = 300): Promise<{ assets: SynologyPhotoInfo[]; total: number; hasMore: boolean }> {

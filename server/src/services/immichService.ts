@@ -2,6 +2,7 @@ import { db } from '../db/database';
 import { maybe_encrypt_api_key, decrypt_api_key } from './apiKeyCrypto';
 import { checkSsrf } from '../utils/ssrfGuard';
 import { writeAudit } from './auditLog';
+import { addTripPhotos, getAlbumIdFromLink, Selection, updateSyncTimeForAlbumLink } from './memoriesService';
 
 // ── Credentials ────────────────────────────────────────────────────────────
 
@@ -313,15 +314,14 @@ export async function syncAlbumAssets(
   linkId: string,
   userId: number
 ): Promise<{ success?: boolean; added?: number; total?: number; error?: string; status?: number }> {
-  const link = db.prepare('SELECT * FROM trip_album_links WHERE id = ? AND trip_id = ? AND user_id = ? AND provider = ?')
-    .get(linkId, tripId, userId, 'immich') as any;
-  if (!link) return { error: 'Album link not found', status: 404 };
+  const albumId = getAlbumIdFromLink(tripId, linkId, userId);
+  if (!albumId) return { error: 'Album link not found', status: 404 };
 
   const creds = getImmichCredentials(userId);
   if (!creds) return { error: 'Immich not configured', status: 400 };
 
   try {
-    const resp = await fetch(`${creds.immich_url}/api/albums/${link.album_id}`, {
+    const resp = await fetch(`${creds.immich_url}/api/albums/${albumId}`, {
       headers: { 'x-api-key': creds.immich_api_key, 'Accept': 'application/json' },
       signal: AbortSignal.timeout(15000),
     });
@@ -329,16 +329,17 @@ export async function syncAlbumAssets(
     const albumData = await resp.json() as { assets?: any[] };
     const assets = (albumData.assets || []).filter((a: any) => a.type === 'IMAGE');
 
-    const insert = db.prepare("INSERT OR IGNORE INTO trip_photos (trip_id, user_id, asset_id, provider, shared) VALUES (?, ?, ?, 'immich', 1)");
-    let added = 0;
-    for (const asset of assets) {
-      const r = insert.run(tripId, userId, asset.id);
-      if (r.changes > 0) added++;
-    }
+    const selection: Selection = {
+      provider: 'immich',
+      asset_ids: assets.map((a: any) => a.id),
+    };
 
-    db.prepare('UPDATE trip_album_links SET last_synced_at = CURRENT_TIMESTAMP WHERE id = ?').run(linkId);
+    const addResult = addTripPhotos(tripId, userId, true, [selection]);
+    if ('error' in addResult) return { error: addResult.error, status: addResult.status };
 
-    return { success: true, added, total: assets.length };
+    updateSyncTimeForAlbumLink(linkId);
+
+    return { success: true, added: addResult.added, total: assets.length };
   } catch {
     return { error: 'Could not reach Immich', status: 502 };
   }

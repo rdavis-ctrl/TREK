@@ -11,6 +11,7 @@ import {
     removeTripPhoto,
     setTripPhotoSharing,
     notifySharedTripPhotos,
+    normalizeSelections,
 } from '../services/memoriesService';
 
 const router = express.Router();
@@ -44,13 +45,14 @@ router.delete('/trips/:tripId/album-links/:linkId', authenticate, (req: Request,
 router.post('/trips/:tripId/photos', authenticate, (req: Request, res: Response) => {
     const authReq = req as AuthRequest;
     const { tripId } = req.params;
+    
+    const selections = normalizeSelections(req.body?.selections, req.body?.provider, req.body?.asset_ids);
+    const shared = req.body?.shared === undefined ? true : !!req.body?.shared;
     const result = addTripPhotos(
         tripId,
         authReq.user.id,
-        req.body?.shared,
-        req.body?.selections,
-        req.body?.provider,
-        req.body?.asset_ids,
+        shared,
+        selections,
     );
     if ('error' in result) return res.status(result.status).json({ error: result.error });
 

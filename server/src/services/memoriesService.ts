@@ -38,12 +38,14 @@ function accessDeniedIfMissing(tripId: string, userId: number): ServiceError | n
   return null;
 }
 
-type Selection = {
+export type Selection = {
   provider: string;
-  asset_ids: unknown[];
+  asset_ids: string[];
 };
 
-function normalizeSelections(selectionsRaw: unknown, providerRaw: unknown, assetIdsRaw: unknown): Selection[] {
+
+//fallback for old clients that don't send selections as an array of provider/asset_id groups
+export function normalizeSelections(selectionsRaw: unknown, providerRaw: unknown, assetIdsRaw: unknown): Selection[] {
   const selectionsFromBody = Array.isArray(selectionsRaw) ? selectionsRaw : null;
   const provider = String(providerRaw || '').toLowerCase();
 
@@ -145,39 +147,53 @@ export function removeAlbumLink(tripId: string, linkId: string, userId: number):
   return { success: true };
 }
 
+function addTripPhoto(tripId: string, userId: number, provider: string, assetId: string, shared: boolean): boolean {
+  const result = db.prepare(
+    'INSERT OR IGNORE INTO trip_photos (trip_id, user_id, asset_id, provider, shared) VALUES (?, ?, ?, ?, ?)'
+  ).run(tripId, userId, assetId, provider, shared ? 1 : 0);
+  return result.changes > 0;
+}
+
 export function addTripPhotos(
   tripId: string,
   userId: number,
-  sharedRaw: unknown,
-  selectionsRaw: unknown,
-  providerRaw: unknown,
-  assetIdsRaw: unknown,
+  shared: boolean,
+  selections: Selection[],
 ): { success: true; added: number; shared: boolean } | ServiceError {
   const denied = accessDeniedIfMissing(tripId, userId);
   if (denied) return denied;
 
-  const shared = sharedRaw === undefined ? true : !!sharedRaw;
-  const selections = normalizeSelections(selectionsRaw, providerRaw, assetIdsRaw);
   if (selections.length === 0) {
-    return { error: 'selections required', status: 400 };
+    return { error: 'No photos selected', status: 400 };
   }
-
-  const insert = db.prepare(
-    'INSERT OR IGNORE INTO trip_photos (trip_id, user_id, asset_id, provider, shared) VALUES (?, ?, ?, ?, ?)'
-  );
 
   let added = 0;
   for (const selection of selections) {
     for (const raw of selection.asset_ids) {
       const assetId = String(raw || '').trim();
       if (!assetId) continue;
-      const result = insert.run(tripId, userId, assetId, selection.provider, shared ? 1 : 0);
-      if (result.changes > 0) added++;
+      if (addTripPhoto(tripId, userId, selection.provider, assetId, shared)) {
+        added++;
+      }
     }
   }
-
   return { success: true, added, shared };
 }
+
+export function getAlbumIdFromLink(tripId: string, linkId: string, userId: number): string {
+  const denied = accessDeniedIfMissing(tripId, userId);
+  if (denied) return null;
+
+  const { album_id } = db.prepare('SELECT album_id FROM trip_album_links WHERE id = ? AND trip_id = ? AND user_id = ?').get(linkId, tripId, userId) as { album_id: string } | null;
+
+  return album_id;
+}
+
+export function updateSyncTimeForAlbumLink(linkId: string): void {
+  db.prepare('UPDATE trip_album_links SET last_synced_at = CURRENT_TIMESTAMP WHERE id = ?').run(linkId);
+}
+
+
 
 export function removeTripPhoto(
   tripId: string,
@@ -256,3 +272,5 @@ export async function notifySharedTripPhotos(
     count: String(added),
   });
 }
+
+
