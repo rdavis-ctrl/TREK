@@ -108,7 +108,7 @@ router.get('/assets/:tripId/:photoId/:ownerId/info', authenticate, async (req: R
 router.get('/assets/:tripId/:photoId/:ownerId/:kind', authenticate, async (req: Request, res: Response) => {
     const authReq = req as AuthRequest;
     const { tripId, photoId, ownerId, kind } = req.params;
-    const { size = 'sm' } = req.query;
+    const { size = "sm" } = req.query;
 
     if (kind !== 'thumbnail' && kind !== 'original') {
         handleServiceResult(res, fail('Invalid asset kind', 400));

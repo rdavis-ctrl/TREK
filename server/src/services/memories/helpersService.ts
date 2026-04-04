@@ -32,7 +32,6 @@ export function handleServiceResult<T>(res: Response, result: ServiceResult<T>):
         res.status(result.error.status).json({ error: result.error.message });
     }
     else {
-        console.log('Service result data:', result.data);
         res.json(result.data);
     }
 }
@@ -52,20 +51,49 @@ export type StatusResult = {
     error: string
 };
 
+export type SyncAlbumResult = {
+    added: number;
+    total: number
+};
+
+
 export type AlbumsList = {
     albums: Array<{ id: string; albumName: string; assetCount: number }>
 };
 
-export type AssetInfo = {
+export type Asset = {
     id: string;
     takenAt: string;
 };
 
 export type AssetsList = {
-    assets: AssetInfo[],
+    assets: Asset[],
     total: number,
     hasMore: boolean
 };
+
+
+export type AssetInfo = {
+    id: string;
+    takenAt: string | null;
+    city: string | null;
+    country: string | null;
+    state?: string | null;
+    camera?: string | null;
+    lens?: string | null;
+    focalLength?: string | number | null;
+    aperture?: string | number | null;
+    shutter?: string | number | null;
+    iso?: string | number | null;
+    lat?: number | null;
+    lng?: number | null;
+    orientation?: number | null;
+    description?: string | null;
+    width?: number | null;
+    height?: number | null;
+    fileSize?: number | null;
+    fileName?: string | null;
+}
 
 
 //for loading routes to settings page, and validating which services user has connected
@@ -134,19 +162,25 @@ export function updateSyncTimeForAlbumLink(linkId: string): void {
 }
 
 export async function pipeAsset(url: string, response: Response): Promise<void> {
-    const resp = await fetch(url);
-
-    response.status(resp.status);
-    if (resp.headers.get('content-type')) response.set('Content-Type', resp.headers.get('content-type') as string);
-    if (resp.headers.get('cache-control')) response.set('Cache-Control', resp.headers.get('cache-control') as string);
-    if (resp.headers.get('content-length')) response.set('Content-Length', resp.headers.get('content-length') as string);
-    if (resp.headers.get('content-disposition')) response.set('Content-Disposition', resp.headers.get('content-disposition') as string);
-
-    if (!resp.body) {
-        response.end();
+    try{
+        const resp = await fetch(url);
+    
+        response.status(resp.status);
+        if (resp.headers.get('content-type')) response.set('Content-Type', resp.headers.get('content-type') as string);
+        if (resp.headers.get('cache-control')) response.set('Cache-Control', resp.headers.get('cache-control') as string);
+        if (resp.headers.get('content-length')) response.set('Content-Length', resp.headers.get('content-length') as string);
+        if (resp.headers.get('content-disposition')) response.set('Content-Disposition', resp.headers.get('content-disposition') as string);
+    
+        if (!resp.body) {
+            response.end();
+        }
+        else {
+            pipeline(Readable.fromWeb(resp.body), response);
+        }
     }
-    else {
-        pipeline(Readable.fromWeb(resp.body), response);
+    catch (error) {
+        response.status(500).json({ error: 'Failed to fetch asset' });
+        response.end();
     }
 
 }

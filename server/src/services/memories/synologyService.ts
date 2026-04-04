@@ -15,18 +15,31 @@ import {
     pipeAsset,
     AlbumsList,
     AssetsList,
-    StatusResult
+    StatusResult,
+    SyncAlbumResult,
+    AssetInfo
 } from './helpersService';
 
-const SYNOLOGY_API_TIMEOUT_MS = 30000;
 const SYNOLOGY_PROVIDER = 'synologyphotos';
 const SYNOLOGY_ENDPOINT_PATH = '/photo/webapi/entry.cgi';
-const SYNOLOGY_DEFAULT_THUMBNAIL_SIZE = 'sm';
+
+interface SynologyUserRecord {
+    synology_url?: string | null;
+    synology_username?: string | null;
+    synology_password?: string | null;
+    synology_sid?: string | null;
+};
 
 interface SynologyCredentials {
     synology_url: string;
     synology_username: string;
     synology_password: string;
+}
+
+interface SynologySettings {
+    synology_url: string;
+    synology_username: string;
+    connected: boolean;
 }
 
 interface ApiCallParams {
@@ -42,53 +55,6 @@ interface SynologyApiResponse<T> {
     error?: { code: number };
 }
 
-export interface SynologySettings {
-    synology_url: string;
-    synology_username: string;
-    connected: boolean;
-}
-
-export interface SynologyAlbumLinkInput {
-    album_id?: string | number;
-    album_name?: string;
-}
-
-export interface SynologySearchInput {
-    from?: string;
-    to?: string;
-    offset?: number;
-    limit?: number;
-}
-
-export interface SynologyProxyResult {
-    status: number;
-    headers: Record<string, string | null>;
-    body: ReadableStream<Uint8Array> | null;
-}
-
-interface SynologyPhotoInfo {
-    id: string;
-    takenAt: string | null;
-    city: string | null;
-    country: string | null;
-    state?: string | null;
-    camera?: string | null;
-    lens?: string | null;
-    focalLength?: string | number | null;
-    aperture?: string | number | null;
-    shutter?: string | number | null;
-    iso?: string | number | null;
-    lat?: number | null;
-    lng?: number | null;
-    orientation?: number | null;
-    description?: string | null;
-    filename?: string | null;
-    filesize?: number | null;
-    width?: number | null;
-    height?: number | null;
-    fileSize?: number | null;
-    fileName?: string | null;
-}
 
 interface SynologyPhotoItem {
     id?: string | number;
@@ -115,12 +81,6 @@ interface SynologyPhotoItem {
     };
 }
 
-type SynologyUserRecord = {
-    synology_url?: string | null;
-    synology_username?: string | null;
-    synology_password?: string | null;
-    synology_sid?: string | null;
-};
 
 function _readSynologyUser(userId: number, columns: string[]): ServiceResult<SynologyUserRecord> {
     try {
@@ -182,7 +142,7 @@ async function _fetchSynologyJson<T>(url: string, body: URLSearchParams): Promis
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         },
         body,
-        signal: AbortSignal.timeout(SYNOLOGY_API_TIMEOUT_MS),
+        signal: AbortSignal.timeout(30000),
     });
 
     if (!resp.ok) {
@@ -238,7 +198,7 @@ async function _requestSynologyApi<T>(userId: number, params: ApiCallParams): Pr
     return result;
 }
 
-function _normalizeSynologyPhotoInfo(item: SynologyPhotoItem): SynologyPhotoInfo {
+function _normalizeSynologyPhotoInfo(item: SynologyPhotoItem): AssetInfo {
     const address = item.additional?.address || {};
     const exif = item.additional?.exif || {};
     const gps = item.additional?.gps || {};
@@ -259,8 +219,6 @@ function _normalizeSynologyPhotoInfo(item: SynologyPhotoItem): SynologyPhotoInfo
         lng: gps.longitude || null,
         orientation: item.additional?.orientation || null,
         description: item.additional?.description || null,
-        filename: item.filename || null,
-        filesize: item.filesize || null,
         width: item.additional?.resolution?.width || null,
         height: item.additional?.resolution?.height || null,
         fileSize: item.filesize || null,
@@ -390,9 +348,9 @@ export async function listSynologyAlbums(userId: number): Promise<ServiceResult<
 }
 
 
-export async function syncSynologyAlbumLink(userId: number, tripId: string, linkId: string): Promise<ServiceResult<{ added: number; total: number }>> {
+export async function syncSynologyAlbumLink(userId: number, tripId: string, linkId: string): Promise<ServiceResult<SyncAlbumResult>> {
     const response = getAlbumIdFromLink(tripId, linkId, userId);
-    if (!response.success) return response as ServiceResult<{ added: number; total: number }>;
+    if (!response.success) return response as ServiceResult<SyncAlbumResult>;
 
     const allItems: SynologyPhotoItem[] = [];
     const pageSize = 1000;
@@ -409,7 +367,7 @@ export async function syncSynologyAlbumLink(userId: number, tripId: string, link
             additional: ['thumbnail'],
         });
 
-        if (!result.success) return result as ServiceResult<{ added: number; total: number }>;
+        if (!result.success) return result as ServiceResult<SyncAlbumResult>;
 
         const items = result.data.list || [];
         allItems.push(...items);
@@ -425,7 +383,7 @@ export async function syncSynologyAlbumLink(userId: number, tripId: string, link
     updateSyncTimeForAlbumLink(linkId);
 
     const result = await addTripPhotos(tripId, userId, true, [selection]);
-    if (!result.success) return result as ServiceResult<{ added: number; total: number }>;
+    if (!result.success) return result as ServiceResult<SyncAlbumResult>;
 
     return success({ added: result.data.added, total: allItems.length });
 }
@@ -451,7 +409,7 @@ export async function searchSynologyPhotos(userId: number, from?: string, to?: s
     }
 
     const result = await _requestSynologyApi<{ list: SynologyPhotoItem[]; total: number }>(userId, params);
-    if (!result.success) return result as ServiceResult<{ assets: SynologyPhotoInfo[]; total: number; hasMore: boolean }>;
+    if (!result.success) return result as ServiceResult<{ assets: AssetInfo[]; total: number; hasMore: boolean }>;
 
     const allItems = result.data.list || [];
     const total = allItems.length;
@@ -464,17 +422,17 @@ export async function searchSynologyPhotos(userId: number, from?: string, to?: s
     });
 }
 
-export async function getSynologyAssetInfo(userId: number, photoId: string, targetUserId?: number): Promise<ServiceResult<SynologyPhotoInfo>> {
+export async function getSynologyAssetInfo(userId: number, photoId: string, targetUserId?: number): Promise<ServiceResult<AssetInfo>> {
     const parsedId = _splitPackedSynologyId(photoId);
     const result = await _requestSynologyApi<{ list: SynologyPhotoItem[] }>(targetUserId, {
         api: 'SYNO.Foto.Browse.Item',
         method: 'get',
         version: 5,
-        id: `[${parsedId.id}]`,
+        id: `[${Number(parsedId.id) + 1}]`, //for some reason synology wants id moved by one to get image info
         additional: ['resolution', 'exif', 'gps', 'address', 'orientation', 'description'],
     });
 
-    if (!result.success) return result as ServiceResult<SynologyPhotoInfo>;
+    if (!result.success) return result as ServiceResult<AssetInfo>;
 
     const metadata = result.data.list?.[0];
     if (!metadata) return fail('Photo not found', 404);
@@ -518,7 +476,7 @@ export async function streamSynologyAsset(
             mode: 'download',
             id: parsedId.id,
             type: 'unit',
-            size: String(size || SYNOLOGY_DEFAULT_THUMBNAIL_SIZE),
+            size: size,
             cache_key: parsedId.cacheKey,
             _sid: sid.data,
         })
