@@ -173,6 +173,27 @@ function setAdminGlobalPref(event: NotifEventType, channel: 'email' | 'webhook',
 
 // ── Preferences update ─────────────────────────────────────────────────────
 
+// ── Shared helper for per-user channel preference upserts ─────────────────
+
+function applyUserChannelPrefs(
+  userId: number,
+  prefs: Partial<Record<string, Partial<Record<string, boolean>>>>,
+  upsert: ReturnType<typeof db.prepare>,
+  del: ReturnType<typeof db.prepare>
+): void {
+  for (const [eventType, channels] of Object.entries(prefs)) {
+    if (!channels) continue;
+    for (const [channel, enabled] of Object.entries(channels)) {
+      if (enabled) {
+        // Remove explicit row — default is enabled
+        del.run(userId, eventType, channel);
+      } else {
+        upsert.run(userId, eventType, channel, 0);
+      }
+    }
+  }
+}
+
 /**
  * Bulk-update preferences from the matrix UI.
  * Inserts disabled rows (enabled=0) and removes rows that are enabled (default).
@@ -187,20 +208,7 @@ export function setPreferences(
   const del = db.prepare(
     'DELETE FROM notification_channel_preferences WHERE user_id = ? AND event_type = ? AND channel = ?'
   );
-
-  db.transaction(() => {
-    for (const [eventType, channels] of Object.entries(prefs)) {
-      if (!channels) continue;
-      for (const [channel, enabled] of Object.entries(channels)) {
-        if (enabled) {
-          // Remove explicit row — default is enabled
-          del.run(userId, eventType, channel);
-        } else {
-          upsert.run(userId, eventType, channel, 0);
-        }
-      }
-    }
-  })();
+  db.transaction(() => applyUserChannelPrefs(userId, prefs, upsert, del))();
 }
 
 /**
@@ -219,24 +227,33 @@ export function setAdminPreferences(
     'DELETE FROM notification_channel_preferences WHERE user_id = ? AND event_type = ? AND channel = ?'
   );
 
-  db.transaction(() => {
-    for (const [eventType, channels] of Object.entries(prefs)) {
-      if (!channels) continue;
-      for (const [channel, enabled] of Object.entries(channels)) {
-        if (ADMIN_GLOBAL_CHANNELS.includes(channel as NotifChannel)) {
-          // Global setting — stored in app_settings
-          setAdminGlobalPref(eventType as NotifEventType, channel as 'email' | 'webhook', enabled);
-        } else {
-          // Per-user (inapp)
-          if (enabled) {
-            del.run(userId, eventType, channel);
-          } else {
-            upsert.run(userId, eventType, channel, 0);
-          }
-        }
+  // Split global (email/webhook) from per-user (inapp) prefs
+  const globalPrefs: Partial<Record<string, Partial<Record<string, boolean>>>> = {};
+  const userPrefs: Partial<Record<string, Partial<Record<string, boolean>>>> = {};
+
+  for (const [eventType, channels] of Object.entries(prefs)) {
+    if (!channels) continue;
+    for (const [channel, enabled] of Object.entries(channels)) {
+      if (ADMIN_GLOBAL_CHANNELS.includes(channel as NotifChannel)) {
+        if (!globalPrefs[eventType]) globalPrefs[eventType] = {};
+        globalPrefs[eventType]![channel] = enabled;
+      } else {
+        if (!userPrefs[eventType]) userPrefs[eventType] = {};
+        userPrefs[eventType]![channel] = enabled;
       }
     }
-  })();
+  }
+
+  // Apply global prefs outside the transaction (they write to app_settings)
+  for (const [eventType, channels] of Object.entries(globalPrefs)) {
+    if (!channels) continue;
+    for (const [channel, enabled] of Object.entries(channels)) {
+      setAdminGlobalPref(eventType as NotifEventType, channel as 'email' | 'webhook', enabled);
+    }
+  }
+
+  // Apply per-user (inapp) prefs in a transaction
+  db.transaction(() => applyUserChannelPrefs(userId, userPrefs, upsert, del))();
 }
 
 // ── SMTP availability helper (for authService) ─────────────────────────────

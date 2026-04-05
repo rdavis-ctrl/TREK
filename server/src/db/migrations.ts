@@ -563,8 +563,11 @@ function runMigrations(db: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_ncp_user ON notification_channel_preferences(user_id);
       `);
 
-      // Migrate data from old notification_preferences table
-      const oldPrefs = db.prepare('SELECT * FROM notification_preferences').all() as Array<Record<string, number>>;
+      // Migrate data from old notification_preferences table (may not exist on fresh installs)
+      const tableExists = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='notification_preferences'").get() as { name: string } | undefined) != null;
+      const oldPrefs: Array<Record<string, number>> = tableExists
+        ? db.prepare('SELECT * FROM notification_preferences').all() as Array<Record<string, number>>
+        : [];
       const eventCols: Record<string, string> = {
         trip_invite: 'notify_trip_invite',
         booking_change: 'notify_booking_change',
@@ -601,6 +604,10 @@ function runMigrations(db: Database.Database): void {
         INSERT OR IGNORE INTO app_settings (key, value)
           SELECT 'notification_channels', value FROM app_settings WHERE key = 'notification_channel';
       `);
+    },
+    // Migration 70: Drop the old notification_preferences table (data migrated to notification_channel_preferences in migration 69)
+    () => {
+      db.exec('DROP TABLE IF EXISTS notification_preferences;');
     },
   ];
 

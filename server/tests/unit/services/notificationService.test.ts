@@ -49,6 +49,10 @@ vi.mock('nodemailer', () => ({
 
 vi.mock('node-fetch', () => ({ default: fetchMock }));
 vi.mock('../../../src/websocket', () => ({ broadcastToUser: broadcastMock }));
+vi.mock('../../../src/utils/ssrfGuard', () => ({
+  checkSsrf: vi.fn(async () => ({ allowed: true, isPrivate: false, resolvedIp: '1.2.3.4' })),
+  createPinnedAgent: vi.fn(() => ({})),
+}));
 
 import { createTables } from '../../../src/db/schema';
 import { runMigrations } from '../../../src/db/migrations';

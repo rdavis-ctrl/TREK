@@ -716,6 +716,7 @@ export function updateAppSettings(
       }
       if (key === 'smtp_pass' && val === '••••••••') continue;
       if (key === 'smtp_pass') val = encrypt_api_key(val);
+      if (key === 'admin_webhook_url' && val) val = maybe_encrypt_api_key(val) ?? val;
       db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)").run(key, val);
     }
   }

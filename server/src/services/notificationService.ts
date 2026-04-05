@@ -1,5 +1,5 @@
 import { db } from '../db/database';
-import { logDebug } from './auditLog';
+import { logDebug, logError } from './auditLog';
 import {
   getActiveChannels,
   isEnabledForEvent,
@@ -264,7 +264,12 @@ export async function send(payload: NotificationPayload): Promise<void> {
       }
     }
 
-    await Promise.allSettled(promises);
+    const results = await Promise.allSettled(promises);
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        logError(`notificationService.send channel dispatch failed event=${event} recipient=${recipientId}: ${result.reason}`);
+      }
+    }
   }));
 
   // ── Admin webhook (scope: admin) — global, respects global pref ──────
@@ -272,7 +277,9 @@ export async function send(payload: NotificationPayload): Promise<void> {
     const adminWebhookUrl = getAdminWebhookUrl();
     if (adminWebhookUrl) {
       const { title, body } = getEventText('en', event, params);
-      sendWebhook(adminWebhookUrl, { event, title, body, link: fullLink }).catch(() => {});
+      await sendWebhook(adminWebhookUrl, { event, title, body, link: fullLink }).catch((err: unknown) => {
+        logError(`notificationService.send admin webhook failed event=${event}: ${err instanceof Error ? err.message : err}`);
+      });
     }
   }
 }

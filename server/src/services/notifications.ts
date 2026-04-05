@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import { db } from '../db/database';
 import { decrypt_api_key } from './apiKeyCrypto';
 import { logInfo, logDebug, logError } from './auditLog';
+import { checkSsrf, createPinnedAgent } from '../utils/ssrfGuard';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,17 @@ interface SmtpConfig {
   pass: string;
   from: string;
   secure: boolean;
+}
+
+// ── HTML escaping ──────────────────────────────────────────────────────────
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ── Settings helpers ───────────────────────────────────────────────────────
@@ -54,11 +66,13 @@ export function getUserLanguage(userId: number): string {
 }
 
 export function getUserWebhookUrl(userId: number): string | null {
-  return (db.prepare("SELECT value FROM settings WHERE user_id = ? AND key = 'webhook_url'").get(userId) as { value: string } | undefined)?.value || null;
+  const value = (db.prepare("SELECT value FROM settings WHERE user_id = ? AND key = 'webhook_url'").get(userId) as { value: string } | undefined)?.value || null;
+  return value ? decrypt_api_key(value) : null;
 }
 
 export function getAdminWebhookUrl(): string | null {
-  return getAppSetting('admin_webhook_url') || null;
+  const value = getAppSetting('admin_webhook_url') || null;
+  return value ? decrypt_api_key(value) : null;
 }
 
 // ── Email i18n strings ─────────────────────────────────────────────────────
@@ -226,7 +240,9 @@ export function getEventText(lang: string, event: NotifEventType, params: Record
 export function buildEmailHtml(subject: string, body: string, lang: string, navigateTarget?: string): string {
   const s = I18N[lang] || I18N.en;
   const appUrl = getAppUrl();
-  const ctaHref = navigateTarget ? `${appUrl}${navigateTarget}` : (appUrl || '');
+  const ctaHref = escapeHtml(navigateTarget ? `${appUrl}${navigateTarget}` : (appUrl || ''));
+  const safeSubject = escapeHtml(subject);
+  const safeBody = escapeHtml(body);
 
   return `<!DOCTYPE html>
 <html>
@@ -243,9 +259,9 @@ export function buildEmailHtml(subject: string, body: string, lang: string, navi
         </td></tr>
         <!-- Content -->
         <tr><td style="padding: 32px 32px 16px;">
-          <h1 style="margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #111827; line-height: 1.3;">${subject}</h1>
+          <h1 style="margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #111827; line-height: 1.3;">${safeSubject}</h1>
           <div style="width: 32px; height: 3px; background: #111827; border-radius: 2px; margin-bottom: 20px;"></div>
-          <p style="margin: 0; font-size: 14px; color: #4b5563; line-height: 1.7; white-space: pre-wrap;">${body}</p>
+          <p style="margin: 0; font-size: 14px; color: #4b5563; line-height: 1.7; white-space: pre-wrap;">${safeBody}</p>
         </td></tr>
         <!-- CTA -->
         ${appUrl ? `<tr><td style="padding: 8px 32px 32px; text-align: center;">
@@ -328,12 +344,20 @@ export function buildWebhookBody(url: string, payload: { event: string; title: s
 export async function sendWebhook(url: string, payload: { event: string; title: string; body: string; tripName?: string; link?: string }): Promise<boolean> {
   if (!url) return false;
 
+  const ssrf = await checkSsrf(url);
+  if (!ssrf.allowed) {
+    logError(`Webhook blocked by SSRF guard event=${payload.event} url=${url} reason=${ssrf.error}`);
+    return false;
+  }
+
   try {
+    const agent = createPinnedAgent(ssrf.resolvedIp!, new URL(url).protocol);
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: buildWebhookBody(url, payload),
       signal: AbortSignal.timeout(10000),
+      agent,
     });
 
     if (!res.ok) {
