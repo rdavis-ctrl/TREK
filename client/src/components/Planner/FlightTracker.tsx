@@ -216,26 +216,7 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
 
           {/* Map — shown when we have coordinates */}
           {data?.found && data.latitude != null && data.longitude != null && (
-            <div style={{ borderRadius: 12, overflow: 'hidden', height: 180, position: 'relative', flexShrink: 0 }}>
-              <iframe
-                key={`${data.latitude}-${data.longitude}`}
-                src={`https://www.openstreetmap.org/export/embed.html?bbox=${data.longitude - 4},${data.latitude - 3},${data.longitude + 4},${data.latitude + 3}&layer=mapnik&marker=${data.latitude},${data.longitude}`}
-                style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
-                title="Flight position map"
-              />
-              {/* Plane overlay badge */}
-              <div style={{
-                position: 'absolute', top: 8, left: 8,
-                background: 'rgba(59,130,246,0.9)', borderRadius: 8,
-                padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 5,
-                backdropFilter: 'blur(4px)',
-              }}>
-                <Plane size={11} style={{ color: '#fff', transform: data.heading != null ? `rotate(${data.heading - 45}deg)` : undefined }} />
-                <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>
-                  {data.latitude.toFixed(2)}°, {data.longitude.toFixed(2)}°
-                </span>
-              </div>
-            </div>
+            <FlightMap lat={data.latitude} lon={data.longitude} heading={data.heading} />
           )}
 
           {/* Live stats grid — only shown when data has position info */}
@@ -382,6 +363,91 @@ function RouteCell({ label, value, sub, border }: RouteCellProps) {
       <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>{label}</div>
       <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{value}</div>
       {sub && <div style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 2 }}>{sub}</div>}
+    </div>
+  )
+}
+
+// ── FlightMap ─────────────────────────────────────────────────────────────────
+
+const MAP_ZOOM = 6
+const TILE_PX  = 256
+
+function latLonToTileFloat(lat: number, lon: number, z: number) {
+  const n      = Math.pow(2, z)
+  const x      = (lon + 180) / 360 * n
+  const latRad = lat * Math.PI / 180
+  const y      = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n
+  return { x, y }
+}
+
+interface FlightMapProps {
+  lat: number
+  lon: number
+  heading?: number | null
+}
+
+function FlightMap({ lat, lon, heading }: FlightMapProps) {
+  const { x: txf, y: tyf } = latLonToTileFloat(lat, lon, MAP_ZOOM)
+  const tx = Math.floor(txf)
+  const ty = Math.floor(tyf)
+  // Sub-tile pixel offset for the aircraft
+  const offX = (txf - tx) * TILE_PX
+  const offY = (tyf - ty) * TILE_PX
+
+  // 3 × 3 grid of tiles; center tile is [1,1]
+  const tiles = [-1, 0, 1].flatMap(dy =>
+    [-1, 0, 1].map(dx => ({
+      key:  `${dx},${dy}`,
+      url:  `https://tile.openstreetmap.org/${MAP_ZOOM}/${tx + dx}/${ty + dy}.png`,
+      left: (dx + 1) * TILE_PX,
+      top:  (dy + 1) * TILE_PX,
+    }))
+  )
+
+  // Aircraft sits at (TILE_PX + offX, TILE_PX + offY) within the 768×768 grid.
+  // We want it centred in the 180 px tall container.
+  const gridLeft = `calc(50% - ${TILE_PX + offX}px)`
+  const gridTop  = 90 - (TILE_PX + offY)
+
+  return (
+    <div style={{ position: 'relative', height: 180, overflow: 'hidden', borderRadius: 12, background: '#e8eaed', flexShrink: 0 }}>
+      {/* Tile grid */}
+      <div style={{ position: 'absolute', width: TILE_PX * 3, height: TILE_PX * 3, left: gridLeft, top: gridTop }}>
+        {tiles.map(({ key, url, left, top }) => (
+          <img
+            key={key}
+            src={url}
+            alt=""
+            draggable={false}
+            style={{ position: 'absolute', left, top, width: TILE_PX, height: TILE_PX, display: 'block' }}
+          />
+        ))}
+      </div>
+
+      {/* Aircraft marker */}
+      <div style={{
+        position: 'absolute', left: '50%', top: 90,
+        transform: 'translate(-50%, -50%)',
+        width: 28, height: 28, borderRadius: '50%',
+        background: 'rgba(59,130,246,0.92)',
+        boxShadow: '0 0 0 5px rgba(59,130,246,0.25)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 10,
+      }}>
+        <Plane
+          size={14}
+          style={{ color: '#fff', transform: heading != null ? `rotate(${heading - 45}deg)` : undefined }}
+        />
+      </div>
+
+      {/* OSM attribution (required by tile usage policy) */}
+      <div style={{
+        position: 'absolute', bottom: 6, right: 8, zIndex: 10,
+        background: 'rgba(255,255,255,0.75)', borderRadius: 4,
+        padding: '1px 5px', fontSize: 9, color: '#444',
+      }}>
+        © OpenStreetMap contributors
+      </div>
     </div>
   )
 }
