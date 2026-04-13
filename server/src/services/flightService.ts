@@ -175,16 +175,30 @@ interface AdsbAircraft {
   t?: string;                  // aircraft type
 }
 
-/** Fetch live aircraft state from adsb.lol by callsign (case-insensitive). */
+/** Fetch from a single ADS-B source URL and return the first aircraft or null. */
+async function fetchAdsbUrl(url: string): Promise<AdsbAircraft | null> {
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json() as { ac?: AdsbAircraft[]; total?: number };
+    return data.ac && data.ac.length > 0 ? data.ac[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Query a callsign across multiple ADS-B sources for best coverage. */
 async function fetchAdsbByCallsign(callsign: string): Promise<AdsbAircraft | null> {
-  const url = `https://api.adsb.lol/v2/callsign/${encodeURIComponent(callsign.trim())}`;
-  const resp = await fetch(url, {
-    headers: { 'Accept': 'application/json' },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) return null;
-  const data = await resp.json() as { ac?: AdsbAircraft[]; total?: number };
-  return data.ac && data.ac.length > 0 ? data.ac[0] : null;
+  const cs = encodeURIComponent(callsign.trim());
+  // Query adsb.lol and airplanes.live in parallel for maximum coverage
+  const [a, b] = await Promise.all([
+    fetchAdsbUrl(`https://api.adsb.lol/v2/callsign/${cs}`),
+    fetchAdsbUrl(`https://api.airplanes.live/v2/callsign/${cs}`),
+  ]);
+  return a ?? b;
 }
 
 /**
@@ -192,7 +206,6 @@ async function fetchAdsbByCallsign(callsign: string): Promise<AdsbAircraft | nul
  * e.g. "MU524" → try "CES524" (ICAO prefix) then "MU524" (IATA prefix).
  */
 async function findAdsbAircraft(normFlight: string): Promise<AdsbAircraft | null> {
-  // Extract letter prefix and numeric suffix
   const prefixMatch = normFlight.match(/^([A-Z0-9]{2,3})(\d+[A-Z]?)$/);
   if (!prefixMatch) return fetchAdsbByCallsign(normFlight);
 
