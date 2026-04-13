@@ -159,7 +159,7 @@ const AIRLINE_IATA_TO_ICAO: Record<string, string> = {
   AC: 'ACA', AM: 'AMX', LA: 'LAN', G3: 'GLO', CM: 'CMP', AV: 'AVA',
 };
 
-// ── adsb.lol API helpers ──────────────────────────────────────────────────────
+// ── adsb.lol / airplanes.live API helpers ────────────────────────────────────
 
 interface AdsbAircraft {
   hex: string;
@@ -190,10 +190,9 @@ async function fetchAdsbUrl(url: string): Promise<AdsbAircraft | null> {
   }
 }
 
-/** Query a callsign across multiple ADS-B sources for best coverage. */
+/** Query a callsign across adsb.lol and airplanes.live in parallel. */
 async function fetchAdsbByCallsign(callsign: string): Promise<AdsbAircraft | null> {
   const cs = encodeURIComponent(callsign.trim());
-  // Query adsb.lol and airplanes.live in parallel for maximum coverage
   const [a, b] = await Promise.all([
     fetchAdsbUrl(`https://api.adsb.lol/v2/callsign/${cs}`),
     fetchAdsbUrl(`https://api.airplanes.live/v2/callsign/${cs}`),
@@ -213,14 +212,61 @@ async function findAdsbAircraft(normFlight: string): Promise<AdsbAircraft | null
   const numSuffix  = prefixMatch[2];
   const icaoPrefix = AIRLINE_IATA_TO_ICAO[iataPrefix];
 
-  // Try ICAO callsign first (most common for commercial aviation)
   if (icaoPrefix) {
     const result = await fetchAdsbByCallsign(icaoPrefix + numSuffix);
     if (result) return result;
   }
 
-  // Fallback: try the flight number as-is
   return fetchAdsbByCallsign(normFlight);
+}
+
+// ── Aviationstack API helper (fallback for oceanic / coverage gaps) ────────────
+
+interface AviationstackLive {
+  updated: string;
+  latitude: number;
+  longitude: number;
+  altitude: number;         // metres
+  direction: number;        // degrees
+  speed_horizontal: number; // km/h
+  speed_vertical: number;   // km/h
+  is_ground: boolean;
+}
+
+interface AviationstackFlight {
+  flight_status: 'scheduled' | 'active' | 'landed' | 'cancelled' | 'incident' | 'diverted';
+  departure: { iata: string; actual: string | null };
+  arrival:   { iata: string; actual: string | null };
+  flight:    { iata: string; icao: string };
+  live:      AviationstackLive | null;
+}
+
+/**
+ * Query aviationstack for a flight by IATA number.
+ * Only called when ADS-B sources return nothing (conserves the 100 req/month free quota).
+ * Free tier uses HTTP (not HTTPS).
+ */
+async function fetchAviationstack(flightIata: string): Promise<AviationstackFlight | null> {
+  const key = process.env.AVIATIONSTACK_API_KEY;
+  if (!key) return null;
+
+  try {
+    const url = `http://api.aviationstack.com/v1/flights?access_key=${encodeURIComponent(key)}&flight_iata=${encodeURIComponent(flightIata)}&limit=1`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!resp.ok) {
+      console.warn('[flightService] aviationstack returned', resp.status);
+      return null;
+    }
+    const data = await resp.json() as { data?: AviationstackFlight[]; error?: { message: string } };
+    if (data.error) {
+      console.warn('[flightService] aviationstack error:', data.error.message);
+      return null;
+    }
+    return data.data && data.data.length > 0 ? data.data[0] : null;
+  } catch (err) {
+    console.error('[flightService] aviationstack fetch failed:', err);
+    return null;
+  }
 }
 
 // ── Timezone helper ───────────────────────────────────────────────────────────
@@ -282,49 +328,89 @@ export async function getFlightStatus(
     return { found: false, status: 'not_departed', message: 'Flight has not departed yet' };
   }
 
-  // ── Query adsb.lol for live state ──
-  let aircraft: AdsbAircraft | null = null;
-  try {
-    aircraft = await findAdsbAircraft(normFlight);
-  } catch (err) {
-    console.error('[flightService] adsb.lol fetch failed:', err);
-    return { found: false, status: 'error', message: 'Failed to reach flight data service' };
-  }
+  // ── Query ADS-B sources (primary, no rate limit) ──
+  const aircraft = await findAdsbAircraft(normFlight).catch(() => null);
 
-  if (!aircraft) {
-    // Not currently tracked — determine why.
-    // Use 20 h threshold so long-haul flights (up to ~18 h) aren't falsely
-    // marked as landed just because ADS-B coverage is sparse mid-route.
-    const status: FlightStatus = depUnix < now - 20 * 3600 ? 'landed' : 'not_found';
+  if (aircraft) {
+    // Found via ADS-B — most real-time data available
+    const onGround = aircraft.alt_baro === 'ground' || aircraft.alt_baro === 0;
+    const altFt    = typeof aircraft.alt_baro === 'number' && aircraft.alt_baro > 0
+      ? aircraft.alt_baro : null;
+
     return {
-      found: false,
-      status,
-      message: status === 'landed'
-        ? 'Flight has landed and is no longer being tracked'
-        : 'Flight not currently tracked by ADS-B receivers — coverage may be limited in this area',
+      found:         true,
+      status:        onGround ? 'on_ground' : 'airborne',
+      icao24:        aircraft.hex,
+      callsign:      aircraft.flight?.trim() ?? normFlight,
+      latitude:      aircraft.lat ?? null,
+      longitude:     aircraft.lon ?? null,
+      altitude_m:    altFt != null ? Math.round(altFt * 0.3048) : null,
+      velocity_ms:   aircraft.gs != null ? Math.round(aircraft.gs * 0.514444 * 10) / 10 : null,
+      heading:       aircraft.track ?? null,
+      vertical_rate: aircraft.baro_rate != null ? aircraft.baro_rate * 0.00508 : null,
+      on_ground:     onGround,
+      last_contact:  Math.floor(Date.now() / 1000),
     };
   }
 
-  const onGround = aircraft.alt_baro === 'ground' || aircraft.alt_baro === 0;
-  const altFt    = typeof aircraft.alt_baro === 'number' && aircraft.alt_baro > 0
-    ? aircraft.alt_baro : null;
+  // ── ADS-B missed — try aviationstack as fallback (uses monthly quota) ──
+  const avFlight = await fetchAviationstack(normFlight);
 
-  // ── Determine status ──
-  const status: FlightStatus = onGround ? 'on_ground' : 'airborne';
+  if (avFlight) {
+    const s = avFlight.flight_status;
 
+    if (s === 'landed') {
+      return { found: false, status: 'landed', message: 'Flight has landed' };
+    }
+
+    if (s === 'cancelled') {
+      return { found: false, status: 'not_found', message: 'Flight was cancelled' };
+    }
+
+    if (s === 'scheduled') {
+      return { found: false, status: 'not_departed', message: 'Flight has not departed yet' };
+    }
+
+    // active / incident / diverted — flight is airborne
+    const live = avFlight.live;
+    if (live) {
+      const onGround = live.is_ground;
+      return {
+        found:         true,
+        status:        onGround ? 'on_ground' : 'airborne',
+        callsign:      avFlight.flight.icao || normFlight,
+        latitude:      live.latitude,
+        longitude:     live.longitude,
+        altitude_m:    live.altitude,                          // already metres
+        velocity_ms:   Math.round(live.speed_horizontal / 3.6 * 10) / 10, // km/h → m/s
+        heading:       live.direction,
+        vertical_rate: live.speed_vertical / 3.6,             // km/h → m/s
+        on_ground:     onGround,
+        last_contact:  Math.floor(new Date(live.updated).getTime() / 1000),
+        departure_airport: avFlight.departure.iata || null,
+        arrival_airport:   avFlight.arrival.iata   || null,
+      };
+    }
+
+    // aviationstack knows the flight is active but has no live position
+    // (common on free tier for oceanic flights)
+    return {
+      found:   true,
+      status:  'airborne',
+      callsign: avFlight.flight.icao || normFlight,
+      departure_airport: avFlight.departure.iata || null,
+      arrival_airport:   avFlight.arrival.iata   || null,
+      message: 'Flight is airborne — live position unavailable in this region',
+    };
+  }
+
+  // ── Nothing found anywhere ──
+  const fallbackStatus: FlightStatus = depUnix < now - 20 * 3600 ? 'landed' : 'not_found';
   return {
-    found: true,
-    status,
-    icao24:        aircraft.hex,
-    callsign:      aircraft.flight?.trim() ?? normFlight,
-    latitude:      aircraft.lat ?? null,
-    longitude:     aircraft.lon ?? null,
-    // adsb.lol gives feet/knots/fpm — convert to SI for the shared interface
-    altitude_m:    altFt != null ? Math.round(altFt * 0.3048) : null,
-    velocity_ms:   aircraft.gs != null ? Math.round(aircraft.gs * 0.514444 * 10) / 10 : null,
-    heading:       aircraft.track ?? null,
-    vertical_rate: aircraft.baro_rate != null ? aircraft.baro_rate * 0.00508 : null,
-    on_ground:     onGround,
-    last_contact:  Math.floor(Date.now() / 1000),
+    found: false,
+    status: fallbackStatus,
+    message: fallbackStatus === 'landed'
+      ? 'Flight has landed and is no longer being tracked'
+      : 'Flight not currently tracked by ADS-B receivers — coverage may be limited in this area',
   };
 }
