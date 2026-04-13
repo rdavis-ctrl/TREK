@@ -256,6 +256,13 @@ export const weatherApi = {
   getDetailed: (lat: number, lng: number, date: string, lang?: string) => apiClient.get('/weather/detailed', { params: { lat, lng, date, lang } }).then(r => r.data),
 }
 
+export const flightApi = {
+  track: (flightNumber: string, departureAirport: string, departureTime?: string) =>
+    apiClient.get('/flights/track', {
+      params: { flight_number: flightNumber, departure_airport: departureAirport, departure_time: departureTime },
+    }).then(r => r.data),
+}
+
 export const settingsApi = {
   get: () => apiClient.get('/settings').then(r => r.data),
   set: (key: string, value: unknown) => apiClient.put('/settings', { key, value }).then(r => r.data),

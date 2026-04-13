@@ -8,10 +8,11 @@ import { useTranslation } from '../../i18n'
 import {
   Plane, Hotel, Utensils, Train, Car, Ship, Ticket, FileText, MapPin,
   Calendar, Hash, CheckCircle2, Circle, Pencil, Trash2, Plus, ChevronDown, ChevronRight, Users,
-  ExternalLink, BookMarked, Lightbulb, Link2, Clock,
+  ExternalLink, BookMarked, Lightbulb, Link2, Clock, Radio,
 } from 'lucide-react'
 import { getAuthUrl } from '../../api/authUrl'
 import type { Reservation, Day, TripFile, AssignmentsMap } from '../../types'
+import FlightTracker from './FlightTracker'
 
 interface AssignmentLookupEntry {
   dayNumber: number
@@ -74,6 +75,7 @@ function ReservationCard({ r, tripId, onEdit, onDelete, files = [], onNavigateTo
   const attachedFiles = files.filter(f => f.reservation_id === r.id || (f.linked_reservation_ids || []).includes(r.id))
   const linked = r.assignment_id ? assignmentLookup[r.assignment_id] : null
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showTracker, setShowTracker] = useState(false)
 
   const handleToggle = async () => {
     try { await toggleReservationStatus(tripId, r.id) }
@@ -110,6 +112,22 @@ function ReservationCard({ r, tripId, onEdit, onDelete, files = [], onNavigateTo
         <div style={{ width: 1, height: 10, background: 'var(--border-faint)' }} />
         <TypeIcon size={11} style={{ color: typeInfo.color, flexShrink: 0 }} />
         <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>{t(typeInfo.labelKey)}</span>
+        {r.type === 'flight' && (() => {
+          const meta = typeof r.metadata === 'string' ? (() => { try { return JSON.parse(r.metadata || '{}') } catch { return {} } })() : (r.metadata || {})
+          if (!meta.flight_number || !meta.departure_airport) return null
+          return (
+            <button
+              onClick={() => setShowTracker(true)}
+              title="Track live flight"
+              style={{ padding: '2px 6px', background: 'rgba(59,130,246,0.12)', border: 'none', borderRadius: 5, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.22)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.12)')}
+            >
+              <Radio size={9} style={{ color: '#3b82f6' }} />
+              <span style={{ fontSize: 9, fontWeight: 700, color: '#3b82f6' }}>LIVE</span>
+            </button>
+          )
+        })()}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
         {canEdit && (
@@ -261,6 +279,9 @@ function ReservationCard({ r, tripId, onEdit, onDelete, files = [], onNavigateTo
           </div>
         </div>
       )}
+      {/* Flight tracker modal */}
+      {showTracker && <FlightTracker reservation={r} onClose={() => setShowTracker(false)} />}
+
       {/* Delete confirmation popup */}
       {showDeleteConfirm && ReactDOM.createPortal(
         <div style={{

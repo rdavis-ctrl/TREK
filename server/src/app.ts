@@ -31,6 +31,7 @@ import settingsRoutes from './routes/settings';
 import budgetRoutes from './routes/budget';
 import collabRoutes from './routes/collab';
 import backupRoutes from './routes/backup';
+import flightsRoutes from './routes/flights';
 import oidcRoutes from './routes/oidc';
 import vacayRoutes from './routes/vacay';
 import atlasRoutes from './routes/atlas';
@@ -261,6 +262,7 @@ export function createApp(): express.Application {
   app.use('/api/weather', weatherRoutes);
   app.use('/api/settings', settingsRoutes);
   app.use('/api/backup', backupRoutes);
+  app.use('/api/flights', flightsRoutes);
   app.use('/api/notifications', notificationRoutes);
   app.use('/api', shareRoutes);
 
