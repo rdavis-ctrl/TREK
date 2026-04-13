@@ -186,7 +186,7 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
           {loading && !data && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '24px 0', color: 'var(--text-faint)' }}>
               <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} />
-              <span style={{ fontSize: 13 }}>Querying OpenSky Network…</span>
+              <span style={{ fontSize: 13 }}>Querying ADS-B network…</span>
             </div>
           )}
 
