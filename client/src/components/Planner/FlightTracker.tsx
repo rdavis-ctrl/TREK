@@ -264,14 +264,14 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
               : ''}
           </span>
           <a
-            href="https://opensky-network.org"
+            href="https://adsb.lol"
             target="_blank"
             rel="noreferrer"
             style={{ fontSize: 10, color: 'var(--text-faint)', textDecoration: 'none' }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
             onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
           >
-            OpenSky Network ↗
+            adsb.lol ↗
           </a>
           <button
             onClick={refresh}

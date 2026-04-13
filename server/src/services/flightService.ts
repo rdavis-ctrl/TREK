@@ -59,32 +59,6 @@ const IATA_TO_ICAO: Record<string, string> = {
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
-interface OpenSkyFlight {
-  icao24: string;
-  firstSeen: number;
-  estDepartureAirport: string | null;
-  lastSeen: number;
-  estArrivalAirport: string | null;
-  callsign: string | null;
-}
-
-interface OpenSkyStateVector {
-  icao24: string;
-  callsign: string | null;
-  origin_country: string;
-  time_position: number | null;
-  last_contact: number;
-  longitude: number | null;
-  latitude: number | null;
-  baro_altitude: number | null;
-  on_ground: boolean;
-  velocity: number | null;
-  true_track: number | null;
-  vertical_rate: number | null;
-  geo_altitude: number | null;
-  squawk: string | null;
-}
-
 export type FlightStatus =
   | 'airborne'
   | 'on_ground'
@@ -161,53 +135,79 @@ function callsignMatches(rawCallsign: string, normalisedFlight: string): boolean
   return false;
 }
 
-// ── OpenSky API helpers ───────────────────────────────────────────────────────
+// ── IATA → ICAO airline code mapping (for callsign resolution) ───────────────
+// Commercial callsigns use ICAO airline codes, not IATA (e.g. MU→CES, LH→DLH)
 
-const OPENSKY_BASE = 'https://opensky-network.org/api';
+const AIRLINE_IATA_TO_ICAO: Record<string, string> = {
+  // China
+  MU: 'CES', CA: 'CCA', CZ: 'CSN', HU: 'CHH', MF: 'XMN', ZH: 'CSZ',
+  '3U': 'CSC', GS: 'GTI', KN: 'CXA', EU: 'UEA', SC: 'CDG', G5: 'HXA',
+  // USA
+  AA: 'AAL', UA: 'UAL', DL: 'DAL', WN: 'SWA', B6: 'JBU', AS: 'ASA',
+  F9: 'FFT', NK: 'NKS', G4: 'AAY', SY: 'SCX',
+  // Europe
+  LH: 'DLH', BA: 'BAW', AF: 'AFR', KL: 'KLM', IB: 'IBE', SK: 'SAS',
+  AY: 'FIN', LX: 'SWR', OS: 'AUA', SN: 'BEL', TP: 'TAP', VY: 'VLG',
+  U2: 'EZY', FR: 'RYR', W6: 'WZZ', TK: 'THY', PS: 'AUI', LO: 'LOT',
+  // Middle East / Africa
+  EK: 'UAE', EY: 'ETD', QR: 'QTR', GF: 'GFA', MS: 'MSR', ET: 'ETH',
+  // Asia-Pacific
+  CX: 'CPA', CI: 'CAL', BR: 'EVA', SQ: 'SIA', MH: 'MAS', GA: 'GIA',
+  TG: 'THA', VN: 'HVN', OZ: 'AAR', KE: 'KAL', NH: 'ANA', JL: 'JAL',
+  JQ: 'JST', QF: 'QFA', NZ: 'ANZ', AI: 'AIC', SL: 'THA',
+  // Americas
+  AC: 'ACA', AM: 'AMX', LA: 'LAN', G3: 'GLO', CM: 'CMP', AV: 'AVA',
+};
 
-async function fetchDepartures(
-  airportIcao: string,
-  begin: number,
-  end: number,
-): Promise<OpenSkyFlight[]> {
-  const url = `${OPENSKY_BASE}/flights/departure?airport=${airportIcao}&begin=${begin}&end=${end}`;
-  const resp = await fetch(url, {
-    headers: { 'Accept': 'application/json' },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (resp.status === 404) return [];      // no flights in window
-  if (!resp.ok) throw new Error(`OpenSky departures error ${resp.status}`);
-  const data = await resp.json() as OpenSkyFlight[];
-  return Array.isArray(data) ? data : [];
+// ── adsb.lol API helpers ──────────────────────────────────────────────────────
+
+interface AdsbAircraft {
+  hex: string;
+  flight?: string;
+  lat?: number;
+  lon?: number;
+  alt_baro?: number | string;  // feet, or "ground"
+  alt_geom?: number;           // feet
+  gs?: number;                 // knots
+  track?: number;              // degrees
+  baro_rate?: number;          // feet/min
+  r?: string;                  // registration
+  t?: string;                  // aircraft type
 }
 
-async function fetchLiveState(icao24: string): Promise<OpenSkyStateVector | null> {
-  const url = `${OPENSKY_BASE}/states/all?icao24=${icao24.toLowerCase()}`;
+/** Fetch live aircraft state from adsb.lol by callsign (case-insensitive). */
+async function fetchAdsbByCallsign(callsign: string): Promise<AdsbAircraft | null> {
+  const url = `https://api.adsb.lol/v2/callsign/${encodeURIComponent(callsign.trim())}`;
   const resp = await fetch(url, {
     headers: { 'Accept': 'application/json' },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!resp.ok) return null;
-  const data = await resp.json() as { time: number; states: unknown[][] | null };
-  if (!data.states || data.states.length === 0) return null;
+  const data = await resp.json() as { ac?: AdsbAircraft[]; total?: number };
+  return data.ac && data.ac.length > 0 ? data.ac[0] : null;
+}
 
-  const s = data.states[0] as (string | number | boolean | null)[];
-  return {
-    icao24:          s[0] as string,
-    callsign:        s[1] as string | null,
-    origin_country:  s[2] as string,
-    time_position:   s[3] as number | null,
-    last_contact:    s[4] as number,
-    longitude:       s[5] as number | null,
-    latitude:        s[6] as number | null,
-    baro_altitude:   s[7] as number | null,
-    on_ground:       s[8] as boolean,
-    velocity:        s[9] as number | null,
-    true_track:      s[10] as number | null,
-    vertical_rate:   s[11] as number | null,
-    geo_altitude:    s[13] as number | null,
-    squawk:          s[14] as string | null,
-  };
+/**
+ * Try multiple callsign variants for a flight number.
+ * e.g. "MU524" → try "CES524" (ICAO prefix) then "MU524" (IATA prefix).
+ */
+async function findAdsbAircraft(normFlight: string): Promise<AdsbAircraft | null> {
+  // Extract letter prefix and numeric suffix
+  const prefixMatch = normFlight.match(/^([A-Z0-9]{2,3})(\d+[A-Z]?)$/);
+  if (!prefixMatch) return fetchAdsbByCallsign(normFlight);
+
+  const iataPrefix = prefixMatch[1];
+  const numSuffix  = prefixMatch[2];
+  const icaoPrefix = AIRLINE_IATA_TO_ICAO[iataPrefix];
+
+  // Try ICAO callsign first (most common for commercial aviation)
+  if (icaoPrefix) {
+    const result = await fetchAdsbByCallsign(icaoPrefix + numSuffix);
+    if (result) return result;
+  }
+
+  // Fallback: try the flight number as-is
+  return fetchAdsbByCallsign(normFlight);
 }
 
 // ── Timezone helper ───────────────────────────────────────────────────────────
@@ -250,16 +250,9 @@ export async function getFlightStatus(
     return { found: false, status: 'not_found', message: 'No departure airport provided' };
   }
 
-  const airportIcao = resolveAirportCode(departureAirport);
-  if (!airportIcao) {
-    return { found: false, status: 'not_found', message: `Unrecognised airport code: ${departureAirport}` };
-  }
-
   const normFlight = normaliseFlightNum(flightNumber);
 
-  // ── Determine search window (max 2 h for anonymous OpenSky) ──
-  // The stored departure time may be in local time; subtract the tz offset to
-  // convert to UTC so the OpenSky query window is correctly positioned.
+  // ── Compute UTC departure time for not_departed check ──
   let depUnixLocal: number;
   if (departureTime) {
     depUnixLocal = Math.floor(new Date(departureTime).getTime() / 1000);
@@ -268,9 +261,7 @@ export async function getFlightStatus(
   }
 
   const tzOffsetSecs = parseTzOffsetSeconds(departureTimezone ?? '');
-  // depUnixUTC = local unix − tz offset  (e.g. 13:50 JST − 9h = 04:50 UTC)
   const depUnix = tzOffsetSecs !== 0 ? depUnixLocal - tzOffsetSecs : depUnixLocal;
-
   const now = Math.floor(Date.now() / 1000);
 
   // Flight departs more than 45 minutes from now → not yet departed
@@ -278,68 +269,47 @@ export async function getFlightStatus(
     return { found: false, status: 'not_departed', message: 'Flight has not departed yet' };
   }
 
-  // Centre a 2-hour window on the UTC departure time
-  const begin = depUnix - 3600;
-  const end   = depUnix + 3600;
-
-  // ── Query OpenSky departures ──
-  let departures: OpenSkyFlight[];
+  // ── Query adsb.lol for live state ──
+  let aircraft: AdsbAircraft | null = null;
   try {
-    departures = await fetchDepartures(airportIcao, begin, end);
+    aircraft = await findAdsbAircraft(normFlight);
   } catch (err) {
-    console.error('[flightService] departures fetch failed:', err);
-    return { found: false, status: 'error', message: 'Failed to reach OpenSky Network' };
+    console.error('[flightService] adsb.lol fetch failed:', err);
+    return { found: false, status: 'error', message: 'Failed to reach flight data service' };
   }
 
-  // ── Find matching flight ──
-  const match = departures.find(
-    f => f.callsign && callsignMatches(f.callsign, normFlight),
-  );
-
-  if (!match) {
+  if (!aircraft) {
+    // Not currently tracked — determine why
+    const status: FlightStatus = depUnix < now - 3600 ? 'landed' : 'not_found';
     return {
       found: false,
-      status: 'not_found',
-      message: `No matching flight found at ${airportIcao} around departure time`,
+      status,
+      message: status === 'landed'
+        ? 'Flight has landed and is no longer being tracked'
+        : 'Flight not currently tracked — it may not have departed yet',
     };
   }
 
-  // ── Get live state ──
-  let state: OpenSkyStateVector | null = null;
-  try {
-    state = await fetchLiveState(match.icao24);
-  } catch (err) {
-    console.error('[flightService] states fetch failed:', err);
-  }
+  const onGround = aircraft.alt_baro === 'ground' || aircraft.alt_baro === 0;
+  const altFt    = typeof aircraft.alt_baro === 'number' && aircraft.alt_baro > 0
+    ? aircraft.alt_baro : null;
 
   // ── Determine status ──
-  let status: FlightStatus;
-  if (!state) {
-    // Flight was found in departures but no live state — probably landed
-    status = match.lastSeen < now - 600 ? 'landed' : 'not_found';
-  } else if (state.on_ground) {
-    status = 'on_ground';
-  } else {
-    status = 'airborne';
-  }
+  const status: FlightStatus = onGround ? 'on_ground' : 'airborne';
 
   return {
     found: true,
     status,
-    icao24:         match.icao24,
-    callsign:       match.callsign?.trim() ?? undefined,
-    origin_country: state?.origin_country,
-    latitude:       state?.latitude ?? null,
-    longitude:      state?.longitude ?? null,
-    altitude_m:     state?.baro_altitude ?? state?.geo_altitude ?? null,
-    velocity_ms:    state?.velocity ?? null,
-    heading:        state?.true_track ?? null,
-    vertical_rate:  state?.vertical_rate ?? null,
-    on_ground:      state?.on_ground,
-    last_contact:   state?.last_contact,
-    departure_airport: match.estDepartureAirport,
-    arrival_airport:   match.estArrivalAirport,
-    first_seen:     match.firstSeen,
-    last_seen:      match.lastSeen,
+    icao24:        aircraft.hex,
+    callsign:      aircraft.flight?.trim() ?? normFlight,
+    latitude:      aircraft.lat ?? null,
+    longitude:     aircraft.lon ?? null,
+    // adsb.lol gives feet/knots/fpm — convert to SI for the shared interface
+    altitude_m:    altFt != null ? Math.round(altFt * 0.3048) : null,
+    velocity_ms:   aircraft.gs != null ? Math.round(aircraft.gs * 0.514444 * 10) / 10 : null,
+    heading:       aircraft.track ?? null,
+    vertical_rate: aircraft.baro_rate != null ? aircraft.baro_rate * 0.00508 : null,
+    on_ground:     onGround,
+    last_contact:  Math.floor(Date.now() / 1000),
   };
 }
