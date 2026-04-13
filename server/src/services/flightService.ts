@@ -292,14 +292,16 @@ export async function getFlightStatus(
   }
 
   if (!aircraft) {
-    // Not currently tracked — determine why
-    const status: FlightStatus = depUnix < now - 3600 ? 'landed' : 'not_found';
+    // Not currently tracked — determine why.
+    // Use 20 h threshold so long-haul flights (up to ~18 h) aren't falsely
+    // marked as landed just because ADS-B coverage is sparse mid-route.
+    const status: FlightStatus = depUnix < now - 20 * 3600 ? 'landed' : 'not_found';
     return {
       found: false,
       status,
       message: status === 'landed'
         ? 'Flight has landed and is no longer being tracked'
-        : 'Flight not currently tracked — it may not have departed yet',
+        : 'Flight not currently tracked by ADS-B receivers — coverage may be limited in this area',
     };
   }
 
