@@ -11,6 +11,7 @@ type FlightStatus = 'airborne' | 'on_ground' | 'landed' | 'not_found' | 'not_dep
 interface FlightData {
   found: boolean
   status: FlightStatus
+  source?: 'adsb' | 'aviationstack'
   icao24?: string
   callsign?: string
   origin_country?: string
@@ -204,8 +205,18 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
             </div>
           )}
 
+          {/* No-position notice — airborne but ADS-B/aviationstack has no coordinates */}
+          {data?.found && (data.status === 'airborne' || data.status === 'on_ground') &&
+           data.altitude_m == null && data.velocity_ms == null && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '10px 14px', borderRadius: 10, background: 'var(--bg-secondary)', textAlign: 'center', lineHeight: 1.6 }}>
+              Flight is airborne but out of ADS-B range.<br />
+              <span style={{ opacity: 0.7 }}>Live position is unavailable over open ocean.</span>
+            </div>
+          )}
+
           {/* Live stats grid — only shown when data has position info */}
-          {data?.found && (data.status === 'airborne' || data.status === 'on_ground') && (
+          {data?.found && (data.status === 'airborne' || data.status === 'on_ground') &&
+           (data.altitude_m != null || data.velocity_ms != null) && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
               {/* Altitude */}
               <StatCard
@@ -258,21 +269,34 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
           <span style={{ flex: 1, fontSize: 10, color: 'var(--text-faint)' }}>
             {refreshedAt
               ? `Updated ${refreshedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
-              : 'Powered by OpenSky Network'}
+              : 'Live flight data'}
             {(data?.status === 'airborne' || data?.status === 'on_ground') && !loading
               ? ` · refreshing in ${countdown}s`
               : ''}
           </span>
-          <a
-            href="https://adsb.lol"
-            target="_blank"
-            rel="noreferrer"
-            style={{ fontSize: 10, color: 'var(--text-faint)', textDecoration: 'none' }}
-            onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
-          >
-            adsb.lol ↗
-          </a>
+          {data?.source === 'aviationstack' ? (
+            <a
+              href="https://aviationstack.com"
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: 10, color: 'var(--text-faint)', textDecoration: 'none' }}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
+            >
+              aviationstack ↗
+            </a>
+          ) : (
+            <a
+              href="https://adsb.lol"
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: 10, color: 'var(--text-faint)', textDecoration: 'none' }}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--text-primary)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
+            >
+              adsb.lol ↗
+            </a>
+          )}
           <button
             onClick={refresh}
             disabled={loading}

@@ -70,6 +70,7 @@ export type FlightStatus =
 export interface FlightStatusResult {
   found: boolean;
   status: FlightStatus;
+  source?: 'adsb' | 'aviationstack';
   icao24?: string;
   callsign?: string;
   origin_country?: string;
@@ -339,6 +340,7 @@ export async function getFlightStatus(
 
     return {
       found:         true,
+      source:        'adsb',
       status:        onGround ? 'on_ground' : 'airborne',
       icao24:        aircraft.hex,
       callsign:      aircraft.flight?.trim() ?? normFlight,
@@ -377,6 +379,7 @@ export async function getFlightStatus(
       const onGround = live.is_ground;
       return {
         found:         true,
+        source:        'aviationstack',
         status:        onGround ? 'on_ground' : 'airborne',
         callsign:      avFlight.flight.icao || normFlight,
         latitude:      live.latitude,
@@ -395,12 +398,13 @@ export async function getFlightStatus(
     // aviationstack knows the flight is active but has no live position
     // (common on free tier for oceanic flights)
     return {
-      found:   true,
-      status:  'airborne',
+      found:    true,
+      source:   'aviationstack',
+      status:   'airborne',
       callsign: avFlight.flight.icao || normFlight,
       departure_airport: avFlight.departure.iata || null,
       arrival_airport:   avFlight.arrival.iata   || null,
-      message: 'Flight is airborne — live position unavailable in this region',
+      message:  'Flight is airborne — live position unavailable in this region',
     };
   }
 
