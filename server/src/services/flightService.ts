@@ -173,7 +173,7 @@ async function fetchDepartures(
   const url = `${OPENSKY_BASE}/flights/departure?airport=${airportIcao}&begin=${begin}&end=${end}`;
   const resp = await fetch(url, {
     headers: { 'Accept': 'application/json' },
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(30_000),
   });
   if (resp.status === 404) return [];      // no flights in window
   if (!resp.ok) throw new Error(`OpenSky departures error ${resp.status}`);
@@ -185,7 +185,7 @@ async function fetchLiveState(icao24: string): Promise<OpenSkyStateVector | null
   const url = `${OPENSKY_BASE}/states/all?icao24=${icao24.toLowerCase()}`;
   const resp = await fetch(url, {
     headers: { 'Accept': 'application/json' },
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!resp.ok) return null;
   const data = await resp.json() as { time: number; states: unknown[][] | null };
