@@ -214,6 +214,30 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
             </div>
           )}
 
+          {/* Map — shown when we have coordinates */}
+          {data?.found && data.latitude != null && data.longitude != null && (
+            <div style={{ borderRadius: 12, overflow: 'hidden', height: 180, position: 'relative', flexShrink: 0 }}>
+              <iframe
+                key={`${data.latitude}-${data.longitude}`}
+                src={`https://www.openstreetmap.org/export/embed.html?bbox=${data.longitude - 4},${data.latitude - 3},${data.longitude + 4},${data.latitude + 3}&layer=mapnik&marker=${data.latitude},${data.longitude}`}
+                style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+                title="Flight position map"
+              />
+              {/* Plane overlay badge */}
+              <div style={{
+                position: 'absolute', top: 8, left: 8,
+                background: 'rgba(59,130,246,0.9)', borderRadius: 8,
+                padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 5,
+                backdropFilter: 'blur(4px)',
+              }}>
+                <Plane size={11} style={{ color: '#fff', transform: data.heading != null ? `rotate(${data.heading - 45}deg)` : undefined }} />
+                <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>
+                  {data.latitude.toFixed(2)}°, {data.longitude.toFixed(2)}°
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Live stats grid — only shown when data has position info */}
           {data?.found && (data.status === 'airborne' || data.status === 'on_ground') &&
            (data.altitude_m != null || data.velocity_ms != null) && (
