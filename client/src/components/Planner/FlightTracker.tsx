@@ -74,16 +74,17 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
     ? (() => { try { return JSON.parse(reservation.metadata || '{}') } catch { return {} } })()
     : (reservation.metadata as Record<string, string> ?? {})
 
-  const flightNumber     = meta.flight_number ?? ''
-  const departureAirport = meta.departure_airport ?? ''
-  const arrivalAirport   = meta.arrival_airport ?? ''
-  const departureTime    = reservation.reservation_time ?? ''
+  const flightNumber      = meta.flight_number ?? ''
+  const departureAirport  = meta.departure_airport ?? ''
+  const arrivalAirport    = meta.arrival_airport ?? ''
+  const departureTime     = reservation.reservation_time ?? ''
+  const departureTimezone = meta.departure_timezone ?? ''
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const result = await flightApi.track(flightNumber, departureAirport, departureTime)
+      const result = await flightApi.track(flightNumber, departureAirport, departureTime, departureTimezone)
       setData(result)
       setRefreshedAt(new Date())
       setCountdown(60)
@@ -93,7 +94,7 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
     } finally {
       setLoading(false)
     }
-  }, [flightNumber, departureAirport, departureTime])
+  }, [flightNumber, departureAirport, departureTime, departureTimezone])
 
   // Initial load
   useEffect(() => { refresh() }, [refresh])

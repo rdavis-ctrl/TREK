@@ -257,9 +257,9 @@ export const weatherApi = {
 }
 
 export const flightApi = {
-  track: (flightNumber: string, departureAirport: string, departureTime?: string) =>
+  track: (flightNumber: string, departureAirport: string, departureTime?: string, departureTimezone?: string) =>
     apiClient.get('/flights/track', {
-      params: { flight_number: flightNumber, departure_airport: departureAirport, departure_time: departureTime },
+      params: { flight_number: flightNumber, departure_airport: departureAirport, departure_time: departureTime, departure_timezone: departureTimezone },
     }).then(r => r.data),
 }
 

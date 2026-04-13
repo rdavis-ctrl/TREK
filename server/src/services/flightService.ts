@@ -210,19 +210,37 @@ async function fetchLiveState(icao24: string): Promise<OpenSkyStateVector | null
   };
 }
 
+// ── Timezone helper ───────────────────────────────────────────────────────────
+
+/**
+ * Parse a timezone string like "UTC+9", "UTC+09:00", "GMT-5", "+05:30" into
+ * a signed offset in seconds.  Returns 0 if unrecognised.
+ */
+function parseTzOffsetSeconds(tz: string): number {
+  if (!tz) return 0;
+  const m = tz.match(/([+-])(\d{1,2})(?::(\d{2}))?/);
+  if (!m) return 0;
+  const sign    = m[1] === '+' ? 1 : -1;
+  const hours   = parseInt(m[2], 10);
+  const minutes = parseInt(m[3] ?? '0', 10);
+  return sign * (hours * 3600 + minutes * 60);
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 /**
  * Look up live status for a flight reservation.
  *
- * @param flightNumber    - As stored in metadata, e.g. "LH 123" or "EK001"
- * @param departureAirport - IATA (FRA) or ICAO (EDDF) code
- * @param departureTime   - ISO 8601 string of scheduled departure
+ * @param flightNumber      - As stored in metadata, e.g. "LH 123" or "EK001"
+ * @param departureAirport  - IATA (FRA) or ICAO (EDDF) code
+ * @param departureTime     - ISO 8601 string of scheduled departure (may be local time)
+ * @param departureTimezone - Timezone string e.g. "UTC+9" or "GMT-5" (optional)
  */
 export async function getFlightStatus(
   flightNumber: string,
   departureAirport: string,
   departureTime: string,
+  departureTimezone?: string,
 ): Promise<FlightStatusResult> {
   // ── Validate inputs ──
   if (!flightNumber?.trim()) {
@@ -240,12 +258,18 @@ export async function getFlightStatus(
   const normFlight = normaliseFlightNum(flightNumber);
 
   // ── Determine search window (max 2 h for anonymous OpenSky) ──
-  let depUnix: number;
+  // The stored departure time may be in local time; subtract the tz offset to
+  // convert to UTC so the OpenSky query window is correctly positioned.
+  let depUnixLocal: number;
   if (departureTime) {
-    depUnix = Math.floor(new Date(departureTime).getTime() / 1000);
+    depUnixLocal = Math.floor(new Date(departureTime).getTime() / 1000);
   } else {
-    depUnix = Math.floor(Date.now() / 1000);
+    depUnixLocal = Math.floor(Date.now() / 1000);
   }
+
+  const tzOffsetSecs = parseTzOffsetSeconds(departureTimezone ?? '');
+  // depUnixUTC = local unix − tz offset  (e.g. 13:50 JST − 9h = 04:50 UTC)
+  const depUnix = tzOffsetSecs !== 0 ? depUnixLocal - tzOffsetSecs : depUnixLocal;
 
   const now = Math.floor(Date.now() / 1000);
 
@@ -254,7 +278,7 @@ export async function getFlightStatus(
     return { found: false, status: 'not_departed', message: 'Flight has not departed yet' };
   }
 
-  // Centre a 2-hour window on the scheduled departure
+  // Centre a 2-hour window on the UTC departure time
   const begin = depUnix - 3600;
   const end   = depUnix + 3600;
 

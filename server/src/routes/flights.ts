@@ -13,7 +13,7 @@ const router = express.Router();
  *   departure_time    - ISO 8601 scheduled departure, e.g. "2024-06-15T14:30:00"
  */
 router.get('/track', authenticate, async (req: Request, res: Response) => {
-  const { flight_number, departure_airport, departure_time } = req.query as Record<string, string>;
+  const { flight_number, departure_airport, departure_time, departure_timezone } = req.query as Record<string, string>;
 
   if (!flight_number) {
     return res.status(400).json({ error: 'flight_number is required' });
@@ -27,6 +27,7 @@ router.get('/track', authenticate, async (req: Request, res: Response) => {
       flight_number,
       departure_airport,
       departure_time ?? '',
+      departure_timezone,
     );
     res.json(result);
   } catch (err) {
