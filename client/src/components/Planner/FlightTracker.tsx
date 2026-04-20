@@ -35,6 +35,26 @@ interface FlightTrackerProps {
   onClose: () => void
 }
 
+// ── Position history & dead reckoning ─────────────────────────────────────────
+
+interface PositionPoint { lat: number; lon: number; ts: number }
+
+interface LastKnown {
+  lat: number; lon: number
+  heading: number; speed_ms: number
+  ts: number
+}
+
+/** Project a position forward using heading + speed. Simple flat-earth approx. */
+function deadReckon(lk: LastKnown, nowMs: number): { lat: number; lon: number } {
+  const elapsedS  = (nowMs - lk.ts) / 1000
+  const distM     = lk.speed_ms * elapsedS
+  const bearingR  = lk.heading * Math.PI / 180
+  const dLat      = (distM * Math.cos(bearingR)) / 111_320
+  const dLon      = (distM * Math.sin(bearingR)) / (111_320 * Math.cos(lk.lat * Math.PI / 180))
+  return { lat: lk.lat + dLat, lon: lk.lon + dLon }
+}
+
 // ── Conversion helpers ────────────────────────────────────────────────────────
 
 const mToFt   = (m: number) => Math.round(m * 3.28084)
@@ -70,6 +90,11 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
   const [countdown, setCountdown]     = useState(60)
   const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
   const countRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Position history for trajectory trail (up to 200 points)
+  const [posHistory, setPosHistory] = useState<PositionPoint[]>([])
+  // Last confirmed GPS fix — used for dead reckoning when ADS-B coverage is lost
+  const [lastKnown, setLastKnown]   = useState<LastKnown | null>(null)
 
   const meta: Record<string, string> = typeof reservation.metadata === 'string'
     ? (() => { try { return JSON.parse(reservation.metadata || '{}') } catch { return {} } })()
@@ -112,6 +137,24 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
       if (countRef.current)  clearInterval(countRef.current)
     }
   }, [data?.status, refresh])
+
+  // Accumulate position history & update lastKnown whenever we get real coordinates
+  useEffect(() => {
+    if (data?.latitude == null || data.longitude == null) return
+    const pt: PositionPoint = { lat: data.latitude, lon: data.longitude, ts: Date.now() }
+    setPosHistory(prev => [...prev.slice(-199), pt])
+    if (data.heading != null && data.velocity_ms != null && data.velocity_ms > 0) {
+      setLastKnown({ lat: data.latitude, lon: data.longitude, heading: data.heading, speed_ms: data.velocity_ms, ts: Date.now() })
+    }
+  }, [data?.latitude, data?.longitude])
+
+  // ── Determine display position (actual or dead-reckoned) ──
+  const hasActualPos  = data?.latitude != null && data.longitude != null
+  const drPos         = !hasActualPos && lastKnown ? deadReckon(lastKnown, Date.now()) : null
+  const displayLat    = hasActualPos ? data!.latitude! : drPos?.lat ?? null
+  const displayLon    = hasActualPos ? data!.longitude! : drPos?.lon ?? null
+  const displayHdg    = data?.heading ?? lastKnown?.heading ?? null
+  const isEstimated   = !hasActualPos && drPos != null
 
   const statusCfg = STATUS_CONFIG[data?.status ?? 'error']
 
@@ -205,25 +248,30 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
             </div>
           )}
 
-          {/* No-position notice — airborne but ADS-B/aviationstack has no coordinates */}
+          {/* No-position notice — only when truly out of range and no dead reckoning */}
           {data?.found && (data.status === 'airborne' || data.status === 'on_ground') &&
-           data.altitude_m == null && data.velocity_ms == null && (
+           data.altitude_m == null && data.velocity_ms == null && !drPos && (
             <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '10px 14px', borderRadius: 10, background: 'var(--bg-secondary)', textAlign: 'center', lineHeight: 1.6 }}>
               Flight is airborne but out of ADS-B range.<br />
               <span style={{ opacity: 0.7 }}>Live position is unavailable over open ocean.</span>
             </div>
           )}
 
-          {/* Map — shown when we have coordinates */}
-          {data?.found && data.latitude != null && data.longitude != null && (
-            <FlightMap lat={data.latitude} lon={data.longitude} heading={data.heading} />
+          {/* Map — shown when we have actual or estimated coordinates */}
+          {data?.found && displayLat != null && displayLon != null && (
+            <FlightMap
+              lat={displayLat}
+              lon={displayLon}
+              heading={displayHdg}
+              history={posHistory}
+              estimated={isEstimated}
+            />
           )}
 
           {/* Live stats grid — only shown when data has position info */}
           {data?.found && (data.status === 'airborne' || data.status === 'on_ground') &&
            (data.altitude_m != null || data.velocity_ms != null) && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-              {/* Altitude */}
               <StatCard
                 Icon={ArrowUp}
                 label="Altitude"
@@ -231,14 +279,12 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
                 sub={data.vertical_rate != null ? fmtVr(data.vertical_rate) : undefined}
                 color="#3b82f6"
               />
-              {/* Speed */}
               <StatCard
                 Icon={Gauge}
                 label="Speed"
                 value={fmtSpd(data.velocity_ms)}
                 color="#8b5cf6"
               />
-              {/* Heading */}
               <StatCard
                 Icon={Navigation}
                 label="Heading"
@@ -246,7 +292,6 @@ export default function FlightTracker({ reservation, onClose }: FlightTrackerPro
                 color="#f59e0b"
                 iconRotate={data.heading ?? 0}
               />
-              {/* Last contact */}
               <StatCard
                 Icon={Clock}
                 label="Last Contact"
@@ -381,20 +426,20 @@ function latLonToTileFloat(lat: number, lon: number, z: number) {
 }
 
 interface FlightMapProps {
-  lat: number
-  lon: number
-  heading?: number | null
+  lat:       number
+  lon:       number
+  heading?:  number | null
+  history?:  PositionPoint[]
+  estimated?: boolean
 }
 
-function FlightMap({ lat, lon, heading }: FlightMapProps) {
+function FlightMap({ lat, lon, heading, history = [], estimated = false }: FlightMapProps) {
   const { x: txf, y: tyf } = latLonToTileFloat(lat, lon, MAP_ZOOM)
-  const tx = Math.floor(txf)
-  const ty = Math.floor(tyf)
-  // Sub-tile pixel offset for the aircraft
+  const tx   = Math.floor(txf)
+  const ty   = Math.floor(tyf)
   const offX = (txf - tx) * TILE_PX
   const offY = (tyf - ty) * TILE_PX
 
-  // 3 × 3 grid of tiles; center tile is [1,1]
   const tiles = [-1, 0, 1].flatMap(dy =>
     [-1, 0, 1].map(dx => ({
       key:  `${dx},${dy}`,
@@ -404,10 +449,25 @@ function FlightMap({ lat, lon, heading }: FlightMapProps) {
     }))
   )
 
-  // Aircraft sits at (TILE_PX + offX, TILE_PX + offY) within the 768×768 grid.
-  // We want it centred in the 180 px tall container.
   const gridLeft = `calc(50% - ${TILE_PX + offX}px)`
   const gridTop  = 90 - (TILE_PX + offY)
+
+  // Convert a lat/lon to SVG x,y relative to the aircraft's centre (220, 90)
+  // viewBox is 440×180 (modal body minus padding)
+  function toSvg(pLat: number, pLon: number) {
+    const { x: pxf, y: pyf } = latLonToTileFloat(pLat, pLon, MAP_ZOOM)
+    return {
+      x: 220 + (pxf - txf) * TILE_PX,
+      y:  90 + (pyf - tyf) * TILE_PX,
+    }
+  }
+
+  // Build polyline from history + current position
+  const trailPoints = [...history, { lat, lon, ts: 0 }].map(p => toSvg(p.lat, p.lon))
+  const polyline    = trailPoints.map(p => `${p.x},${p.y}`).join(' ')
+
+  const markerColor = estimated ? 'rgba(249,115,22,0.92)' : 'rgba(59,130,246,0.92)'
+  const ringColor   = estimated ? 'rgba(249,115,22,0.25)' : 'rgba(59,130,246,0.25)'
 
   return (
     <div style={{ position: 'relative', height: 180, overflow: 'hidden', borderRadius: 12, background: '#e8eaed', flexShrink: 0 }}>
@@ -424,23 +484,50 @@ function FlightMap({ lat, lon, heading }: FlightMapProps) {
         ))}
       </div>
 
+      {/* SVG overlay: trajectory trail */}
+      {trailPoints.length > 1 && (
+        <svg
+          viewBox="0 0 440 180"
+          preserveAspectRatio="none"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', zIndex: 5, pointerEvents: 'none' }}
+        >
+          <polyline
+            points={polyline}
+            fill="none"
+            stroke={estimated ? 'rgba(249,115,22,0.6)' : 'rgba(59,130,246,0.6)'}
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray={estimated ? '6 4' : '0'}
+          />
+        </svg>
+      )}
+
       {/* Aircraft marker */}
       <div style={{
         position: 'absolute', left: '50%', top: 90,
         transform: 'translate(-50%, -50%)',
         width: 28, height: 28, borderRadius: '50%',
-        background: 'rgba(59,130,246,0.92)',
-        boxShadow: '0 0 0 5px rgba(59,130,246,0.25)',
+        background: markerColor,
+        boxShadow: `0 0 0 5px ${ringColor}`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         zIndex: 10,
       }}>
-        <Plane
-          size={14}
-          style={{ color: '#fff', transform: heading != null ? `rotate(${heading - 45}deg)` : undefined }}
-        />
+        <Plane size={14} style={{ color: '#fff', transform: heading != null ? `rotate(${heading - 45}deg)` : undefined }} />
       </div>
 
-      {/* OSM attribution (required by tile usage policy) */}
+      {/* Estimated position badge */}
+      {estimated && (
+        <div style={{
+          position: 'absolute', top: 8, left: 8, zIndex: 10,
+          background: 'rgba(249,115,22,0.88)', borderRadius: 6,
+          padding: '2px 8px', fontSize: 10, fontWeight: 700, color: '#fff',
+        }}>
+          Estimated position
+        </div>
+      )}
+
+      {/* OSM attribution */}
       <div style={{
         position: 'absolute', bottom: 6, right: 8, zIndex: 10,
         background: 'rgba(255,255,255,0.75)', borderRadius: 4,
